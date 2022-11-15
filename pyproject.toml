@@ -6,7 +6,7 @@ authors = ["Martijn Wiekens <martijn@alexion.nl>"]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-boto3 = "^1.26.9"
+boto3 = ">=1.10.49"
 envs = "^1.4"
 python-jose = {extras = ["pycryptodome"], version = "^3.3.0"}
 requests = "^>=2.22.0"
