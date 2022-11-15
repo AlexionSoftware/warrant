@@ -204,7 +204,7 @@ socks = ["PySocks (>=1.5.6,!=1.5.7,<2.0)"]
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.10"
-content-hash = "625f3b55a79c02a58ea73cc5770840b52f32e7dfe363ad9df0745ee10a46bb89"
+content-hash = "690985851ec5724e1baad126261b44e217cb27c027a4942afa08a4da6babc959"
 
 [metadata.files]
 boto3 = []
