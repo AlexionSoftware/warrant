@@ -4,8 +4,7 @@ import datetime
 import hashlib
 import hmac
 import re
-from _typeshed import ReadableBuffer
-from typing import Optional
+from typing import Any, Optional
 
 import boto3
 import os
@@ -27,7 +26,7 @@ g_hex = '2'
 info_bits = bytearray('Caldera Derived Key', 'utf-8')
 
 
-def hash_sha256(buf: ReadableBuffer) -> str:
+def hash_sha256(buf: Any) -> str:
     """AuthenticationHelper.hash"""
     a = hashlib.sha256(buf).hexdigest()
     return (64 - len(a)) * '0' + a
@@ -67,7 +66,7 @@ def pad_hex(long_int: int) -> str:
     return hash_str
 
 
-def compute_hkdf(ikm: ReadableBuffer, salt: bytes) -> bytes:
+def compute_hkdf(ikm: Any, salt: bytes) -> bytes:
     """
     Standard hkdf algorithm
     :param {Buffer} ikm Input key material.
@@ -106,9 +105,11 @@ class AWSSRP:
 
     NEW_PASSWORD_REQUIRED_CHALLENGE = 'NEW_PASSWORD_REQUIRED'
     PASSWORD_VERIFIER_CHALLENGE = 'PASSWORD_VERIFIER'
+    DEVICE_SRP_AUTH = 'DEVICE_SRP_AUTH'
 
     def __init__(self, username: str, password: str, pool_id: str, client_id: str, pool_region: Optional[str]=None,
-                 client: Optional[ICognitoClient]=None, client_secret: Optional[str]=None):
+                 client: Optional[ICognitoClient]=None, client_secret: Optional[str]=None,
+                 device_key: Optional[str]=None, device_password: Optional[str]=None, device_group_key: Optional[str]=None,):
         if pool_region is not None and client is not None:
             raise ValueError("pool_region and client should not both be specified "
                              "(region should be passed to the boto3 client instead)")
@@ -118,6 +119,10 @@ class AWSSRP:
         self.pool_id = pool_id
         self.client_id = client_id
         self.client_secret = client_secret
+        self.device_key = device_key
+        self.device_group_key = device_group_key
+        self.device_password = device_password
+
         self.client = client if client else boto3.client('cognito-idp', region_name=pool_region)
         self.big_n = hex_to_long(n_hex)
         self.g = hex_to_long(g_hex)
@@ -176,6 +181,8 @@ class AWSSRP:
             auth_params.update({
                 "SECRET_HASH":
                 self.get_secret_hash(self.username, self.client_id, self.client_secret)})
+        if self.device_key is not None:
+            auth_params.update({"DEVICE_KEY": self.device_key})
         return auth_params
 
     @staticmethod
@@ -207,6 +214,8 @@ class AWSSRP:
             response.update({
                 "SECRET_HASH":
                 self.get_secret_hash(self.username, self.client_id, self.client_secret)})
+        if self.device_key is not None:
+            response["DEVICE_KEY"] = self.device_key
         return response
 
     def authenticate_user(self, client: Optional[ICognitoClient]=None) -> dict[str, str]:
@@ -223,7 +232,8 @@ class AWSSRP:
                 ClientId=self.client_id,
                 ChallengeName=self.PASSWORD_VERIFIER_CHALLENGE,
                 ChallengeResponses=challenge_response)
-
+            if tokens.get('ChallengeName') == self.DEVICE_SRP_AUTH:
+                return self._authenticate_device(boto_client, tokens)
             if tokens.get('ChallengeName') == self.NEW_PASSWORD_REQUIRED_CHALLENGE:
                 raise ForceChangePasswordException('Change password before authenticating')
 
@@ -260,3 +270,91 @@ class AWSSRP:
             return tokens
         else:
             raise NotImplementedError('The %s challenge is not supported' % response['ChallengeName'])
+
+    @staticmethod
+    def generate_hash_device(device_group_key: str, device_key: str) -> tuple[str, str]:
+        """ Generate information for devices
+        """
+        # source: https://github.com/amazon-archives/amazon-cognito-identity-js/blob/6b87f1a30a998072b4d98facb49dcaf8780d15b0/src/AuthenticationHelper.js#L137
+
+        # random device password, which will be used for DEVICE_SRP_AUTH flow
+        device_password = base64.standard_b64encode(os.urandom(40)).decode('utf-8')
+
+        combined_string = '%s%s:%s' % (device_group_key, device_key, device_password)
+        combined_string_hash = hash_sha256(combined_string.encode('utf-8'))
+        salt = pad_hex(get_random(16))
+
+        x_value = hex_to_long(hex_hash(salt + combined_string_hash))
+        g = hex_to_long(g_hex)
+        big_n = hex_to_long(n_hex)
+        verifier_device_not_padded = pow(g, x_value, big_n)
+        verifier = pad_hex(verifier_device_not_padded)
+
+        device_secret_verifier_config = {
+            "PasswordVerifier": base64.standard_b64encode(bytearray.fromhex(verifier)).decode('utf-8'),
+            "Salt": base64.standard_b64encode(bytearray.fromhex(salt)).decode('utf-8')
+        }
+        return device_password, device_secret_verifier_config
+
+    def _authenticate_device(self, boto_client: ICognitoClient, response: dict) -> dict[str, str]:
+        auth_params = self.get_auth_params()
+
+        # Note that device auth flow doesn't start with client.initiate_auth(),
+        # but rather with client.respond_to_auth_challenge() straight away
+        response_auth = boto_client.respond_to_auth_challenge(
+            ClientId=self.client_id,
+            ChallengeName='DEVICE_SRP_AUTH',
+            ChallengeResponses=auth_params,
+        )
+
+        cr = self.process_device_challenge(response_auth['ChallengeParameters'])
+        response_verifier = boto_client.respond_to_auth_challenge(
+            ClientId=self.client_id,
+            ChallengeName='DEVICE_PASSWORD_VERIFIER',
+            ChallengeResponses=cr
+        )
+        return response_verifier
+
+    def get_device_authentication_key(self, device_group_key: str, device_key: str, device_password: str, server_b_value: int, salt: str) -> int:
+        u_value = calculate_u(self.large_a_value, server_b_value)
+        if u_value == 0:
+            raise ValueError('U cannot be zero.')
+        username_password = '%s%s:%s' % (device_group_key, device_key, device_password)
+        username_password_hash = hash_sha256(username_password.encode('utf-8'))
+
+        x_value = hex_to_long(hex_hash(pad_hex(salt) + username_password_hash))
+        g_mod_pow_xn = pow(self.g, x_value, self.big_n)
+        int_value2 = server_b_value - self.k * g_mod_pow_xn
+        s_value = pow(int_value2, self.small_a_value + u_value * x_value, self.big_n)
+        hkdf = compute_hkdf(bytearray.fromhex(pad_hex(s_value)),
+                            bytearray.fromhex(pad_hex(long_to_hex(u_value))))
+        return hkdf
+
+    def process_device_challenge(self, challenge_parameters: dict) -> dict:
+        username = challenge_parameters['USERNAME']
+        salt_hex = challenge_parameters['SALT']
+        srp_b_hex = challenge_parameters['SRP_B']
+        secret_block_b64 = challenge_parameters['SECRET_BLOCK']
+        # re strips leading zero from a day number (required by AWS Cognito)
+        timestamp = re.sub(r" 0(\d) ", r" \1 ",
+                           datetime.datetime.utcnow().strftime("%a %b %d %H:%M:%S UTC %Y"))
+        hkdf = self.get_device_authentication_key(self.device_group_key,
+                                                  self.device_key,
+                                                  self.device_password,
+                                                  hex_to_long(srp_b_hex),
+                                                  salt_hex)
+        secret_block_bytes = base64.standard_b64decode(secret_block_b64)
+        msg = bytearray(self.device_group_key, 'utf-8') + bytearray(self.device_key, 'utf-8') + \
+              bytearray(secret_block_bytes) + bytearray(timestamp, 'utf-8')
+        hmac_obj = hmac.new(hkdf, msg, digestmod=hashlib.sha256)
+        signature_string = base64.standard_b64encode(hmac_obj.digest())
+        response = {'TIMESTAMP': timestamp,
+                    'USERNAME': username,
+                    'PASSWORD_CLAIM_SECRET_BLOCK': secret_block_b64,
+                    'PASSWORD_CLAIM_SIGNATURE': signature_string.decode('utf-8'),
+                    'DEVICE_KEY': self.device_key}
+        if self.client_secret is not None:
+            response.update({
+                "SECRET_HASH":
+                    self.get_secret_hash(username, self.client_id, self.client_secret)})
+        return response

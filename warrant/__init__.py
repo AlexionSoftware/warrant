@@ -142,6 +142,7 @@ class Cognito:
             username: Optional[str]=None, id_token: Optional[str]=None, refresh_token: Optional[str]=None,
             access_token: Optional[str]=None, client_secret: Optional[str]=None,
             access_key: Optional[str]=None, secret_key: Optional[str]=None,
+            device_key: Optional[str]=None, device_password: Optional[str]=None, device_group_key: Optional[str]=None,
     ):
         """
         :param user_pool_id: Cognito User Pool ID
@@ -166,6 +167,9 @@ class Cognito:
         self.custom_attributes = None
         self.base_attributes = None
         self.pool_jwk = None
+        self.device_key = device_key
+        self.device_group_key = device_group_key
+        self.device_password = device_password
 
         boto3_client_kwargs = {}
         if access_key and secret_key:
@@ -381,14 +385,24 @@ class Cognito:
         :param password: The user's passsword
         :return:
         """
+        # Login
         aws = AWSSRP(username=self.username, password=password, pool_id=self.user_pool_id,
                      client_id=self.client_id, client=self.client,
-                     client_secret=self.client_secret)
-        tokens = aws.authenticate_user()
-        self.verify_token(tokens['AuthenticationResult']['IdToken'], 'id_token', 'id')
-        self.refresh_token = tokens['AuthenticationResult']['RefreshToken']
-        self.verify_token(tokens['AuthenticationResult']['AccessToken'], 'access_token', 'access')
-        self.token_type = tokens['AuthenticationResult']['TokenType']
+                     client_secret=self.client_secret,
+                     device_key=self.device_key, device_group_key=self.device_group_key, device_password=self.device_password)
+        user_tokens = aws.authenticate_user()
+
+        # Retrieve login tokens
+        self.verify_token(user_tokens['AuthenticationResult']['IdToken'], 'id_token', 'id')
+        self.refresh_token = user_tokens['AuthenticationResult']['RefreshToken']
+        self.verify_token(user_tokens['AuthenticationResult']['AccessToken'], 'access_token', 'access')
+        self.token_type = user_tokens['AuthenticationResult']['TokenType']
+
+        # Check of we have device information
+        if "NewDeviceMetadata" in user_tokens['AuthenticationResult']:
+            # Save the device information
+            self.device_key = user_tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceKey']
+            self.device_group_key = user_tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceGroupKey']
 
     def new_password_challenge(self, password: str, new_password: str) -> None:
         """
@@ -535,7 +549,7 @@ class Cognito:
             AttributeName=attribute
         )
 
-    def validate_verification(self, confirmation_code: str, attribute: str='email') -> Dict:
+    def validate_verification(self, confirmation_code: str, attribute: str='email') -> dict:
         """
         Verifies the specified user attributes in the user pool.
         :param confirmation_code: Code sent to user upon intiating verification
@@ -554,6 +568,8 @@ class Cognito:
         """
         auth_params = {'REFRESH_TOKEN': self.refresh_token}
         self._add_secret_hash(auth_params, 'SECRET_HASH')
+        if self.device_key is not None:
+            auth_params["DEVICE_KEY"] = self.device_key
         refresh_response = self.client.initiate_auth(
             ClientId=self.client_id,
             AuthFlow='REFRESH_TOKEN',
@@ -664,3 +680,43 @@ class Cognito:
         response = self.client.list_groups(UserPoolId=self.user_pool_id)
         return [self.get_group_obj(group_data)
                 for group_data in response.get('Groups')]
+
+    def can_register_device(self) -> bool:
+        """ Check if we can register a device in Cognito
+        """
+        return self.device_group_key is not None and self.device_password is None
+
+    def register_device(self, device_name: str) -> str:
+        """ Register the device
+
+            :returns device_password (str)
+        """
+        # Check if we can register
+        if not self.can_register_device():
+            raise ValueError("Device cannot be registered. This is not enabled in Cognito")
+
+        # 3. Generate random device password, device salt and verifier
+        device_password, device_secret_verifier_config = AWSSRP.generate_hash_device(self.device_group_key, self.device_key)
+        self.device_password = device_password
+        self.client.confirm_device(
+            AccessToken=self.access_token,
+            DeviceKey=self.device_key,
+            DeviceSecretVerifierConfig=device_secret_verifier_config,
+            DeviceName=device_name,
+        )
+
+        # 4. Remember the device
+        self.client.update_device_status(
+            AccessToken=self.access_token,
+            DeviceKey=self.device_key,
+            DeviceRememberedStatus='remembered'
+        )
+        return device_password
+
+    def forget_device(self) -> None:
+        """ Forget the current device
+        """
+        self.client.forget_device(
+            AccessToken=self.access_token,
+            DeviceKey=self.device_key,
+        )
