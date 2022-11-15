@@ -3,15 +3,16 @@ import boto3
 import datetime
 import re
 import requests
+from typing import Any, Optional
 
 from envs import env
 from jose import jwt, JWTError
 
-from .aws_srp import AWSSRP
+from .aws_srp import AWSSRP, ICognitoClient
 from .exceptions import TokenVerificationException
 
 
-def cognito_to_dict(attr_list, attr_map=None):
+def cognito_to_dict(attr_list: list[dict[str, str]], attr_map: Optional[dict[str, str]]=None) -> dict[str, str]:
     if attr_map is None:
         attr_map = {}
     attr_dict = dict()
@@ -25,7 +26,7 @@ def cognito_to_dict(attr_list, attr_map=None):
     return attr_dict
 
 
-def dict_to_cognito(attributes, attr_map=None):
+def dict_to_cognito(attributes: dict[str, str], attr_map: Optional[dict[str, str]]=None) -> list[dict[str, str]]:
     """
     :param attributes: Dictionary of User Pool attribute names/values
     :param attr_map: Dictonnary with attributes mapping
@@ -40,7 +41,7 @@ def dict_to_cognito(attributes, attr_map=None):
     return [{'Name': key, 'Value': value} for key, value in attributes.items()]
 
 
-def camel_to_snake(camel_str):
+def camel_to_snake(camel_str: str) -> str:
     """
     :param camel_str: string
     :return: string converted from a CamelCase to a snake_case
@@ -49,7 +50,7 @@ def camel_to_snake(camel_str):
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
-def snake_to_camel(snake_str):
+def snake_to_camel(snake_str: str) -> str:
     """
     :param snake_str: string
     :return: string converted from a snake_case to a CamelCase
@@ -58,9 +59,9 @@ def snake_to_camel(snake_str):
     return ''.join(x.title() for x in components)
 
 
-class UserObj(object):
+class UserObj:
 
-    def __init__(self, username, attribute_list, cognito_obj, metadata=None, attr_map=None):
+    def __init__(self, username: str, attribute_list: list[str], cognito_obj: dict, metadata: Optional[dict]=None, attr_map: Optional[dict]=None):
         """
         :param username:
         :param attribute_list:
@@ -76,41 +77,41 @@ class UserObj(object):
         self.phone_number_verified = self._data.pop('phone_number_verified', None)
         self._metadata = {} if metadata is None else metadata
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return '<{class_name}: {uni}>'.format(
             class_name=self.__class__.__name__, uni=self.__unicode__())
 
-    def __unicode__(self):
+    def __unicode__(self) -> str:
         return self.username
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         if name in list(self.__dict__.get('_data', {}).keys()):
             return self._data.get(name)
         if name in list(self.__dict__.get('_metadata', {}).keys()):
             return self._metadata.get(name)
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, name: str, value: str) -> None:
         if name in list(self.__dict__.get('_data', {}).keys()):
             self._data[name] = value
         else:
             super(UserObj, self).__setattr__(name, value)
 
-    def save(self, admin=False):
+    def save(self, admin: bool=False) -> None:
         if admin:
             self._cognito.admin_update_profile(self._data, self._attr_map)
             return
         self._cognito.update_profile(self._data, self._attr_map)
 
-    def delete(self, admin=False):
+    def delete(self, admin: bool=False) -> None:
         if admin:
             self._cognito.admin_delete_user()
             return
         self._cognito.delete_user()
 
 
-class GroupObj(object):
+class GroupObj:
 
-    def __init__(self, group_data, cognito_obj):
+    def __init__(self, group_data: dict[str, str], cognito_obj: dict):
         """
         :param group_data: a dictionary with information about a group
         :param cognito_obj: an instance of the Cognito class
@@ -124,23 +125,23 @@ class GroupObj(object):
         self.role_arn = self._data.pop('RoleArn', None)
         self.precedence = self._data.pop('Precedence', None)
 
-    def __unicode__(self):
+    def __unicode__(self) -> str:
         return self.group_name
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return '<{class_name}: {uni}>'.format(
             class_name=self.__class__.__name__, uni=self.__unicode__())
 
 
-class Cognito(object):
+class Cognito:
     user_class = UserObj
     group_class = GroupObj
 
     def __init__(
-            self, user_pool_id, client_id, user_pool_region=None,
-            username=None, id_token=None, refresh_token=None,
-            access_token=None, client_secret=None,
-            access_key=None, secret_key=None,
+            self, user_pool_id: str, client_id: str, user_pool_region: Optional[str]=None,
+            username: Optional[str]=None, id_token: Optional[str]=None, refresh_token: Optional[str]=None,
+            access_token: Optional[str]=None, client_secret: Optional[str]=None,
+            access_key: Optional[str]=None, secret_key: Optional[str]=None,
     ):
         """
         :param user_pool_id: Cognito User Pool ID
@@ -175,7 +176,7 @@ class Cognito(object):
 
         self.client = boto3.client('cognito-idp', **boto3_client_kwargs)
 
-    def get_keys(self):
+    def get_keys(self) -> dict[str, str]:
 
         if self.pool_jwk:
             return self.pool_jwk
@@ -192,12 +193,12 @@ class Cognito(object):
                 )).json()
             return self.pool_jwk
 
-    def get_key(self, kid):
-        keys = self.get_keys().get('keys')
+    def get_key(self, kid: str) -> str:
+        keys: dict = self.get_keys().get('keys')
         key = list(filter(lambda x: x.get('kid') == kid, keys))
         return key[0]
 
-    def verify_token(self, token, id_name, token_use):
+    def verify_token(self, token: str, id_name: str, token_use: str) -> dict[str, Any]:
         kid = jwt.get_unverified_header(token).get('kid')
         unverified_claims = jwt.get_unverified_claims(token)
         token_use_verified = unverified_claims.get('token_use') == token_use
@@ -213,8 +214,8 @@ class Cognito(object):
         setattr(self, id_name, token)
         return verified
 
-    def get_user_obj(self, username=None, attribute_list=None, metadata=None,
-                     attr_map=None):
+    def get_user_obj(self, username: Optional[str]=None, attribute_list: Optional[list[dict[str, str]]]=None, metadata: Optional[dict]=None,
+                     attr_map: Optional[dict]=None) -> UserObj:
         """
         Returns the specified
         :param username: Username of the user
@@ -229,7 +230,7 @@ class Cognito(object):
                                cognito_obj=self,
                                metadata=metadata, attr_map=attr_map)
 
-    def get_group_obj(self, group_data):
+    def get_group_obj(self, group_data: dict) -> GroupObj:
         """
         Instantiates the self.group_class
         :param group_data: a dictionary with information about a group
@@ -237,7 +238,7 @@ class Cognito(object):
         """
         return self.group_class(group_data=group_data, cognito_obj=self)
 
-    def switch_session(self, session):
+    def switch_session(self, session: ICognitoClient) -> None:
         """
         Primarily used for unit testing so we can take advantage of the
         placebo library (https://githhub.com/garnaat/placebo)
@@ -246,7 +247,7 @@ class Cognito(object):
         """
         self.client = session.client('cognito-idp')
 
-    def check_token(self, renew=True):
+    def check_token(self, renew: bool=True) -> bool:
         """
         Checks the exp attribute of the access_token and either refreshes
         the tokens by calling the renew_access_tokens method or does nothing
@@ -266,10 +267,10 @@ class Cognito(object):
             expired = False
         return expired
 
-    def add_base_attributes(self, **kwargs):
+    def add_base_attributes(self, **kwargs) -> None:
         self.base_attributes = kwargs
 
-    def add_custom_attributes(self, **kwargs):
+    def add_custom_attributes(self, **kwargs) -> None:
         custom_key = 'custom'
         custom_attributes = {}
 
@@ -279,7 +280,7 @@ class Cognito(object):
 
         self.custom_attributes = custom_attributes
 
-    def register(self, username, password, attr_map=None):
+    def register(self, username: str, password: str, attr_map: Optional[dict[str, str]]=None) -> dict[str, str]:
         """
         Register the user. Other base attributes from AWS Cognito User Pools
         are  address, birthdate, email, family_name (last name), gender,
@@ -320,7 +321,7 @@ class Cognito(object):
         response.pop('ResponseMetadata')
         return response
 
-    def admin_confirm_sign_up(self, username=None):
+    def admin_confirm_sign_up(self, username: Optional[str]=None) -> None:
         """
         Confirms user registration as an admin without using a confirmation
         code. Works on any user.
@@ -334,7 +335,7 @@ class Cognito(object):
             Username=username,
         )
 
-    def confirm_sign_up(self, confirmation_code, username=None):
+    def confirm_sign_up(self, confirmation_code: str, username: Optional[str]=None) -> None:
         """
         Using the confirmation code that is either sent via email or text
         message.
@@ -350,7 +351,7 @@ class Cognito(object):
         self._add_secret_hash(params, 'SecretHash')
         self.client.confirm_sign_up(**params)
 
-    def admin_authenticate(self, password):
+    def admin_authenticate(self, password: str) -> None:
         """
         Authenticate the user using admin super privileges
         :param password: User's password
@@ -374,7 +375,7 @@ class Cognito(object):
         self.verify_token(tokens['AuthenticationResult']['AccessToken'], 'access_token', 'access')
         self.token_type = tokens['AuthenticationResult']['TokenType']
 
-    def authenticate(self, password):
+    def authenticate(self, password: str) -> None:
         """
         Authenticate the user using the SRP protocol
         :param password: The user's passsword
@@ -389,7 +390,7 @@ class Cognito(object):
         self.verify_token(tokens['AuthenticationResult']['AccessToken'], 'access_token', 'access')
         self.token_type = tokens['AuthenticationResult']['TokenType']
 
-    def new_password_challenge(self, password, new_password):
+    def new_password_challenge(self, password: str, new_password: str) -> None:
         """
         Respond to the new password challenge using the SRP protocol
         :param password: The user's current passsword
@@ -404,7 +405,7 @@ class Cognito(object):
         self.access_token = tokens['AuthenticationResult']['AccessToken']
         self.token_type = tokens['AuthenticationResult']['TokenType']
 
-    def logout(self):
+    def logout(self) -> None:
         """
         Logs the user out of all clients and removes the expires_in,
         expires_datetime, id_token, refresh_token, access_token, and token_type
@@ -420,7 +421,7 @@ class Cognito(object):
         self.access_token = None
         self.token_type = None
 
-    def admin_update_profile(self, attrs, attr_map=None):
+    def admin_update_profile(self, attrs: dict[str, str], attr_map: Optional[dict[str, str]]=None) -> None:
         user_attrs = dict_to_cognito(attrs, attr_map)
         self.client.admin_update_user_attributes(
             UserPoolId=self.user_pool_id,
@@ -428,7 +429,7 @@ class Cognito(object):
             UserAttributes=user_attrs
         )
 
-    def update_profile(self, attrs, attr_map=None):
+    def update_profile(self, attrs: dict[str, str], attr_map: Optional[dict[str, str]]=None) -> None:
         """
         Updates User attributes
         :param attrs: Dictionary of attribute name, values
@@ -441,7 +442,7 @@ class Cognito(object):
             AccessToken=self.access_token
         )
 
-    def get_user(self, attr_map=None):
+    def get_user(self, attr_map: Optional[dict[str, str]]=None) -> UserObj:
         """
         Returns a UserObj (or whatever the self.user_class is) by using the
         user's access token.
@@ -463,7 +464,7 @@ class Cognito(object):
                                  attribute_list=user.get('UserAttributes'),
                                  metadata=user_metadata, attr_map=attr_map)
 
-    def get_users(self, attr_map=None):
+    def get_users(self, attr_map: Optional[dict[str, str]]=None) -> list[UserObj]:
         """
         Returns all users for a user pool. Returns instances of the
         self.user_class.
@@ -479,7 +480,7 @@ class Cognito(object):
                                   attr_map=attr_map)
                 for user in response.get('Users')]
 
-    def admin_get_user(self, attr_map=None):
+    def admin_get_user(self, attr_map: Optional[dict[str, str]]=None) -> UserObj:
         """
         Get the user's details using admin super privileges.
         :param attr_map: Dictionary map from Cognito attributes to attribute
@@ -501,7 +502,7 @@ class Cognito(object):
                                  attribute_list=user.get('UserAttributes'),
                                  metadata=user_metadata, attr_map=attr_map)
 
-    def admin_create_user(self, username, temporary_password='', attr_map=None, **kwargs):
+    def admin_create_user(self, username: str, temporary_password: str='', attr_map: Optional[dict[str, str]]=None, **kwargs) -> dict:
         """
         Create a user using admin super privileges.
         :param username: User Pool username
@@ -523,7 +524,7 @@ class Cognito(object):
         response.pop('ResponseMetadata')
         return response
 
-    def send_verification(self, attribute='email'):
+    def send_verification(self, attribute: str='email') -> None:
         """
         Sends the user an attribute verification code for the specified attribute name.
         :param attribute: Attribute to confirm
@@ -534,7 +535,7 @@ class Cognito(object):
             AttributeName=attribute
         )
 
-    def validate_verification(self, confirmation_code, attribute='email'):
+    def validate_verification(self, confirmation_code: str, attribute: str='email') -> Dict:
         """
         Verifies the specified user attributes in the user pool.
         :param confirmation_code: Code sent to user upon intiating verification
@@ -547,7 +548,7 @@ class Cognito(object):
             Code=confirmation_code
         )
 
-    def renew_access_token(self):
+    def renew_access_token(self) -> None:
         """
         Sets a new access token on the User using the refresh token.
         """
@@ -568,7 +569,7 @@ class Cognito(object):
             }
         )
 
-    def initiate_forgot_password(self):
+    def initiate_forgot_password(self) -> None:
         """
         Sends a verification code to the user to use to change their password.
         """
@@ -579,19 +580,19 @@ class Cognito(object):
         self._add_secret_hash(params, 'SecretHash')
         self.client.forgot_password(**params)
 
-    def delete_user(self):
+    def delete_user(self) -> None:
 
         self.client.delete_user(
             AccessToken=self.access_token
         )
 
-    def admin_delete_user(self):
+    def admin_delete_user(self) -> None:
         self.client.admin_delete_user(
             UserPoolId=self.user_pool_id,
             Username=self.username
         )
 
-    def confirm_forgot_password(self, confirmation_code, password):
+    def confirm_forgot_password(self, confirmation_code: str, password: str) -> None:
         """
         Allows a user to enter a code provided when they reset their password
         to update their password.
@@ -608,7 +609,7 @@ class Cognito(object):
         response = self.client.confirm_forgot_password(**params)
         self._set_attributes(response, {'password': password})
 
-    def change_password(self, previous_password, proposed_password):
+    def change_password(self, previous_password: str, proposed_password: str) -> None:
         """
         Change the User password
         """
@@ -620,7 +621,7 @@ class Cognito(object):
         )
         self._set_attributes(response, {'password': proposed_password})
 
-    def _add_secret_hash(self, parameters, key):
+    def _add_secret_hash(self, parameters: dict, key: str) -> None:
         """
         Helper function that computes SecretHash and adds it
         to a parameters dictionary at a specified key
@@ -630,7 +631,7 @@ class Cognito(object):
                                                  self.client_secret)
             parameters[key] = secret_hash
 
-    def _set_attributes(self, response, attribute_dict):
+    def _set_attributes(self, response: dict, attribute_dict: dict) -> None:
         """
         Set user attributes based on response code
         :param response: HTTP response from Cognito
@@ -644,7 +645,7 @@ class Cognito(object):
             for k, v in attribute_dict.items():
                 setattr(self, k, v)
 
-    def get_group(self, group_name):
+    def get_group(self, group_name: str) -> GroupObj:
         """
         Get a group by a name
         :param group_name: name of a group
@@ -654,7 +655,7 @@ class Cognito(object):
                                          UserPoolId=self.user_pool_id)
         return self.get_group_obj(response.get('Group'))
 
-    def get_groups(self):
+    def get_groups(self) -> list[GroupObj]:
         """
         Returns all groups for a user pool. Returns instances of the
         self.group_class.
