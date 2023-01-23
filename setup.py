@@ -11,7 +11,7 @@ def requirements_from_file(filename='requirements.txt'):
     return [r for r in reqs if re.match(r"^\w+", r)]
 
 
-version = '0.7.1'
+version = '0.7.2'
 
 README = """Python class to integrate Boto3's Cognito client so it is easy to login users. With SRP support."""
 
