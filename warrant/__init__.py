@@ -581,7 +581,6 @@ class Cognito:
             {
                 'access_token': refresh_response['AuthenticationResult']['AccessToken'],
                 'id_token': refresh_response['AuthenticationResult']['IdToken'],
-                'refresh_token': refresh_response['AuthenticationResult']['RefreshToken'],
                 'token_type': refresh_response['AuthenticationResult']['TokenType']
             }
         )
