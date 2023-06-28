@@ -686,7 +686,7 @@ class Cognito:
         """
         return self.device_group_key is not None and self.device_password is None
 
-    def register_device(self, device_name: str) -> str:
+    def register_device(self, device_name: str, remember_device: bool = True) -> str:
         """ Register the device
 
             :returns device_password (str)
@@ -709,7 +709,7 @@ class Cognito:
         self.client.update_device_status(
             AccessToken=self.access_token,
             DeviceKey=self.device_key,
-            DeviceRememberedStatus='remembered'
+            DeviceRememberedStatus='remembered' if remember_device is True else 'not_remembered'
         )
         return device_password
 
