@@ -585,16 +585,17 @@ class Cognito:
             }
         )
 
-    def initiate_forgot_password(self) -> None:
+    def initiate_forgot_password(self, email: str) -> dict[str, dict[str, str]]:
         """
         Sends a verification code to the user to use to change their password.
+        :returns response: Response from Cognito
         """
         params = {
             'ClientId': self.client_id,
-            'Username': self.username
+            'Username': email
         }
         self._add_secret_hash(params, 'SecretHash')
-        self.client.forgot_password(**params)
+        return self.client.forgot_password(**params)
 
     def delete_user(self) -> None:
 
