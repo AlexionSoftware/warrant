@@ -382,7 +382,7 @@ class Cognito:
     def authenticate(self, password: str) -> None:
         """
         Authenticate the user using the SRP protocol
-        :param password: The user's passsword
+        :param password: The user's password
         :return:
         """
         # Login
@@ -403,6 +403,26 @@ class Cognito:
             # Save the device information
             self.device_key = user_tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceKey']
             self.device_group_key = user_tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceGroupKey']
+
+    def authenticate_with_mfa_token(self, password: str, mfaToken: str) -> None:
+        """
+        Authenticate the user using the SRP protocol
+        :param password: The user's password
+        :param token: The user's MFA token
+        :return:
+        """
+        # Login
+        aws = AWSSRP(username=self.username, password=password, pool_id=self.user_pool_id,
+                     client_id=self.client_id, client=self.client,
+                     client_secret=self.client_secret,
+                     device_key=self.device_key, device_group_key=self.device_group_key, device_password=self.device_password)
+        user_tokens = aws.authenticate_user_with_mfa_token(mfaToken=mfaToken)
+
+        # Retrieve login tokens
+        self.verify_token(user_tokens['AuthenticationResult']['IdToken'], 'id_token', 'id')
+        self.refresh_token = user_tokens['AuthenticationResult']['RefreshToken']
+        self.verify_token(user_tokens['AuthenticationResult']['AccessToken'], 'access_token', 'access')
+        self.token_type = user_tokens['AuthenticationResult']['TokenType']
 
     def new_password_challenge(self, password: str, new_password: str) -> None:
         """

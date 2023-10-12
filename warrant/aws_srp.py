@@ -10,7 +10,7 @@ import boto3
 import os
 import six
 
-from .exceptions import ForceChangePasswordException
+from .exceptions import ForceChangePasswordException, MFATokenRequiredException
 
 # https://github.com/aws/amazon-cognito-identity-js/blob/master/src/AuthenticationHelper.js#L22
 n_hex = 'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1' + '29024E088A67CC74020BBEA63B139B22514A08798E3404DD' + \
@@ -106,6 +106,7 @@ class AWSSRP:
     NEW_PASSWORD_REQUIRED_CHALLENGE = 'NEW_PASSWORD_REQUIRED'
     PASSWORD_VERIFIER_CHALLENGE = 'PASSWORD_VERIFIER'
     DEVICE_SRP_AUTH = 'DEVICE_SRP_AUTH'
+    SOFTWARE_TOKEN_MFA_CHALLENGE = 'SOFTWARE_TOKEN_MFA'
 
     def __init__(self, username: str, password: str, pool_id: str, client_id: str, pool_region: Optional[str]=None,
                  client: Optional[ICognitoClient]=None, client_secret: Optional[str]=None,
@@ -236,7 +237,39 @@ class AWSSRP:
                 return self._authenticate_device(boto_client, tokens)
             if tokens.get('ChallengeName') == self.NEW_PASSWORD_REQUIRED_CHALLENGE:
                 raise ForceChangePasswordException('Change password before authenticating')
+            if tokens.get('ChallengeName') == self.SOFTWARE_TOKEN_MFA_CHALLENGE:
+                raise MFATokenRequiredException('Software MFA Token required to authenticate')
 
+            return tokens
+        else:
+            raise NotImplementedError('The %s challenge is not supported' % response['ChallengeName'])
+
+    def authenticate_user_with_mfa_token(self, mfaToken: str, client: Optional[ICognitoClient]=None) -> dict[str, str]:
+        boto_client = self.client or client
+        auth_params = self.get_auth_params()
+        response = boto_client.initiate_auth(
+            AuthFlow='USER_SRP_AUTH',
+            AuthParameters=auth_params,
+            ClientId=self.client_id
+        )
+        if response['ChallengeName'] == self.PASSWORD_VERIFIER_CHALLENGE:
+            challenge_response = self.process_challenge(response['ChallengeParameters'])
+            tokens = boto_client.respond_to_auth_challenge(
+                ClientId=self.client_id,
+                ChallengeName=self.PASSWORD_VERIFIER_CHALLENGE,
+                ChallengeResponses=challenge_response)
+
+            if tokens.get('ChallengeName') == self.SOFTWARE_TOKEN_MFA_CHALLENGE:
+                challenge_response = {
+                    'USERNAME': auth_params['USERNAME'],
+                    'SOFTWARE_TOKEN_MFA_CODE': mfaToken,
+                }
+                mfa_response = boto_client.respond_to_auth_challenge(
+                    ClientId=self.client_id,
+                    ChallengeName=self.SOFTWARE_TOKEN_MFA_CHALLENGE,
+                    Session=tokens['Session'],
+                    ChallengeResponses=challenge_response)
+                return mfa_response
             return tokens
         else:
             raise NotImplementedError('The %s challenge is not supported' % response['ChallengeName'])
