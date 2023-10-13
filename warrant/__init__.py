@@ -424,6 +424,12 @@ class Cognito:
         self.verify_token(user_tokens['AuthenticationResult']['AccessToken'], 'access_token', 'access')
         self.token_type = user_tokens['AuthenticationResult']['TokenType']
 
+        # Check of we have device information
+        if "NewDeviceMetadata" in user_tokens['AuthenticationResult']:
+            # Save the device information
+            self.device_key = user_tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceKey']
+            self.device_group_key = user_tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceGroupKey']
+
     def new_password_challenge(self, password: str, new_password: str) -> None:
         """
         Respond to the new password challenge using the SRP protocol
@@ -438,6 +444,12 @@ class Cognito:
         self.refresh_token = tokens['AuthenticationResult']['RefreshToken']
         self.access_token = tokens['AuthenticationResult']['AccessToken']
         self.token_type = tokens['AuthenticationResult']['TokenType']
+
+        # Check of we have device information
+        if "NewDeviceMetadata" in tokens['AuthenticationResult']:
+            # Save the device information
+            self.device_key = tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceKey']
+            self.device_group_key = tokens['AuthenticationResult']['NewDeviceMetadata']['DeviceGroupKey']
 
     def logout(self) -> None:
         """
