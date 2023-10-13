@@ -252,6 +252,7 @@ class AWSSRP:
             AuthParameters=auth_params,
             ClientId=self.client_id
         )
+        userSub = response["ChallengeParameters"]["USERNAME"]
         if response['ChallengeName'] == self.PASSWORD_VERIFIER_CHALLENGE:
             challenge_response = self.process_challenge(response['ChallengeParameters'])
             tokens = boto_client.respond_to_auth_challenge(
@@ -261,7 +262,7 @@ class AWSSRP:
 
             if tokens.get('ChallengeName') == self.SOFTWARE_TOKEN_MFA_CHALLENGE:
                 challenge_response = {
-                    'USERNAME': auth_params['USERNAME'],
+                    'USERNAME': userSub,
                     'SOFTWARE_TOKEN_MFA_CODE': mfaToken,
                 }
                 mfa_response = boto_client.respond_to_auth_challenge(
